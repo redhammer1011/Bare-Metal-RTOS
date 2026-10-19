@@ -31,6 +31,15 @@ extern "C" {
     extern InitFunc __init_array_end[];
 
     void Reset_Handler();
+    void NMI_Handler() __attribute__((weak, alias("Default_Handler")));
+    void HardFault_Handler() __attribute__((weak, alias("Default_Handler")));
+    void MemManage_Handler() __attribute__((weak, alias("Default_Handler")));
+    void BusFault_Handler() __attribute__((weak, alias("Default_Handler")));
+    void UsageFault_Handler() __attribute__((weak, alias("Default_Handler")));
+    void SVC_Handler() __attribute__((weak, alias("Default_Handler")));
+    void DebugMon_Handler() __attribute__((weak, alias("Default_Handler")));
+    void PendSV_Handler() __attribute__((weak, alias("Default_Handler")));
+    void SysTick_Handler() __attribute__((weak, alias("Default_Handler")));
 }
 
 int main();
@@ -74,4 +83,22 @@ __attribute__((section(".isr_vector"), used))
 const void* const vector_table[] = {
     &_estack,                                         // initial SP
     reinterpret_cast<const void*>(Reset_Handler),     // Reset_Handler
+    reinterpret_cast<const void*>(NMI_Handler),       // NMI_Handler
+    reinterpret_cast<const void*>(HardFault_Handler), // HardFault_Handler
+    reinterpret_cast<const void*>(MemManage_Handler), // MemManage_Handler
+    reinterpret_cast<const void*>(BusFault_Handler),  // BusFault_Handler
+    reinterpret_cast<const void*>(UsageFault_Handler),// UsageFault_Handler
+    nullptr,                                         // reserved
+    nullptr,                                         // reserved
+    nullptr,                                         // reserved
+    nullptr,                                         // reserved
+    reinterpret_cast<const void*>(SVC_Handler),       // SVC_Handler
+    reinterpret_cast<const void*>(DebugMon_Handler),  // DebugMon_Handler
+    nullptr,                                         // reserved
+    reinterpret_cast<const void*>(PendSV_Handler),    // PendSV_Handler
+    reinterpret_cast<const void*>(SysTick_Handler),   // SysTick_Handler
 };
+
+extern "C" void Default_Handler(){
+    while(true){}
+}
