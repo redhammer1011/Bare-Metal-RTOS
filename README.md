@@ -34,7 +34,9 @@ Memory layout (from AN385 Table 3-1), defined in `linker.ld`:
 
 ```
 app/                    application code (main.cpp)
-platform/mps2_an385/    board-specific: startup, linker script, UART driver
+core/                   hardware-independent code (ring buffer), unit-tested on the host
+platform/mps2_an385/    board-specific: startup, linker script, UART, SysTick
+tests/                  GoogleTest unit tests for core/
 cmake/                  arm-none-eabi toolchain file
 scripts/                QEMU launch script
 ```
@@ -55,6 +57,17 @@ Expected output:
 ```
 R
 Hello from main
+```
+
+## Unit tests
+
+Hardware-independent code in `core/` is tested on the host with GoogleTest
+(downloaded automatically by CMake). Requires a host `g++` on `PATH`.
+
+```powershell
+cmake --preset native           # configure (once)
+cmake --build --preset native   # build tests
+ctest --preset native           # run
 ```
 
 ## Debug

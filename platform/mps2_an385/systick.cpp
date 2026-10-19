@@ -20,9 +20,9 @@ namespace{
     
     volatile std::uint32_t millis_counter = 0; // Counter for milliseconds
     
-    const std::uint32_t CTRL_ENABLE = 1u << 0;
-    const std::uint32_t CTRL_TICKINT = 1u << 1;
-    const std::uint32_t CTRL_CLKSOURCE = 1u << 2;
+    constexpr std::uint32_t CTRL_ENABLE = 1u << 0;
+    constexpr std::uint32_t CTRL_TICKINT = 1u << 1;
+    constexpr std::uint32_t CTRL_CLKSOURCE = 1u << 2;
 }
 
 void systick_init(){
