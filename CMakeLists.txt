@@ -12,6 +12,7 @@ set(LINKER_SCRIPT ${PLATFORM_DIR}/linker.ld)
 add_executable(fw.elf
     ${PLATFORM_DIR}/startup.cpp
     ${PLATFORM_DIR}/uart.cpp
+    ${PLATFORM_DIR}/systick.cpp
     app/main.cpp
 )
 

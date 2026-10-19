@@ -47,3 +47,20 @@ void uart_puts(const char* s){
         uart_putc(*s++);
     }
 }
+
+void uart_put_u32(std::uint32_t value){
+    char buffer[11]; // Maximum length for 32-bit unsigned integer in decimal + null terminator
+    int index = 10;  // Start from the end of the buffer
+    buffer[index] = '\0'; // Null terminator
+
+    if(value == 0){
+        buffer[--index] = '0';
+    } else {
+        while(value > 0 && index > 0){
+            buffer[--index] = '0' + (value % 10);
+            value /= 10;
+        }
+    }
+
+    uart_puts(&buffer[index]);
+}

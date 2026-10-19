@@ -15,7 +15,10 @@ if (-not (Test-Path $Elf)) {
     exit 1
 }
 
-$qemuArgs = @("-M", "mps2-an385", "-nographic", "-kernel", $Elf)
+# -icount shift=auto ties emulated time to instructions executed instead of the
+# host clock. Without it, QEMU on Windows cannot deliver a 1 kHz SysTick on time
+# and the firmware's clock runs ~45% slow.
+$qemuArgs = @("-M", "mps2-an385", "-nographic", "-icount", "shift=auto", "-kernel", $Elf)
 if ($Debug) {
     $qemuArgs += @("-s", "-S")
     Write-Host "QEMU paused at reset. In another terminal: arm-none-eabi-gdb build-arm/fw.elf -ex 'target remote :1234'"
