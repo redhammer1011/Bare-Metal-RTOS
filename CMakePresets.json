@@ -1,0 +1,21 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "arm",
+      "displayName": "Firmware (arm-none-eabi, Debug)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-arm",
+      "toolchainFile": "${sourceDir}/cmake/arm-none-eabi.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "arm",
+      "configurePreset": "arm"
+    }
+  ]
+}
