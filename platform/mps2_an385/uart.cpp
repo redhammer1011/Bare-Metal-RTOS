@@ -75,6 +75,14 @@ void uart_put_u32(std::uint32_t value){
     uart_puts(&buffer[index]);
 }
 
+void uart_put_hex32(std::uint32_t value){
+    constexpr char digits[] = "0123456789abcdef";
+    uart_puts("0x");
+    for(int shift = 28; shift >= 0; shift -= 4){   // most significant nibble first
+        uart_putc(digits[(value >> shift) & 0xF]);
+    }
+}
+
 void uart_enable_rx_interrupt(){
     uart0().CTRL |= CTRL_RX_INTEN;
     nvic_enable_irq(0); // Enable UART0 RX interrupt (IRQ 0)

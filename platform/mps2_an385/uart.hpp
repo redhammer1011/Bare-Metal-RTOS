@@ -6,6 +6,7 @@ void uart_init();
 void uart_putc(char c);
 void uart_puts(const char* s);
 void uart_put_u32(std::uint32_t value);
+void uart_put_hex32(std::uint32_t value);   // "0x" + 8 hex digits, e.g. 0x0000081c
 void uart_enable_rx_interrupt();
 bool uart_getc(char& c); // returns true if a character was read, false if no character was available
 std::uint32_t uart_rx_dropped_count(); // returns the number of characters dropped due to RX buffer overflow

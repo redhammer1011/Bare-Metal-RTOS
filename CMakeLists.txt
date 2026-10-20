@@ -21,6 +21,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Generic")
         ${PLATFORM_DIR}/startup.cpp
         ${PLATFORM_DIR}/uart.cpp
         ${PLATFORM_DIR}/systick.cpp
+        ${PLATFORM_DIR}/fault.cpp
         app/main.cpp
     )
 
