@@ -40,10 +40,14 @@ extern "C" {
     void DebugMon_Handler() __attribute__((weak, alias("Default_Handler")));
     void PendSV_Handler() __attribute__((weak, alias("Default_Handler")));
     void SysTick_Handler() __attribute__((weak, alias("Default_Handler")));
+    void UART0RX_Handler() __attribute__((weak, alias("Default_Handler")));
 }
 
 int main();
 
+extern "C" void Default_Handler(){
+    while(true){}
+}
 // ---------------------------------------------------------------------------
 // Part 2: Reset_Handler
 // ---------------------------------------------------------------------------
@@ -97,8 +101,38 @@ const void* const vector_table[] = {
     nullptr,                                         // reserved
     reinterpret_cast<const void*>(PendSV_Handler),    // PendSV_Handler
     reinterpret_cast<const void*>(SysTick_Handler),   // SysTick_Handler
+    // External interrupts: index 16 + IRQ number. Sources per QEMU hw/arm/mps2.c (AN385).
+    reinterpret_cast<const void*>(UART0RX_Handler),    // IRQ 0:  UART0 RX
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 1:  UART0 TX
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 2:  UART1 RX
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 3:  UART1 TX
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 4:  UART2 RX
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 5:  UART2 TX
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 6:  (unused)
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 7:  (unused)
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 8:  TIMER0
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 9:  TIMER1
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 10: dual timer
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 11: (unused)
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 12: UART 0-2 overflow (combined)
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 13: (unused)
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 14: (unused)
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 15: (unused)
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 16: (unused)
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 17: (unused)
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 18: UART3 RX
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 19: UART3 TX
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 20: UART4 RX
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 21: UART4 TX
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 22: (unused)
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 23: (unused)
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 24: (unused)
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 25: (unused)
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 26: (unused)
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 27: (unused)
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 28: (unused)
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 29: (unused)
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 30: (unused)
+    reinterpret_cast<const void*>(Default_Handler),    // IRQ 31: (unused)
 };
-
-extern "C" void Default_Handler(){
-    while(true){}
-}
+static_assert(sizeof(vector_table) / sizeof(vector_table[0]) == 48, "16 system + 32 IRQ entries");

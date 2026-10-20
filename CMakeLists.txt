@@ -26,6 +26,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Generic")
 
     target_include_directories(fw.elf PRIVATE ${PLATFORM_DIR} ${CORE_DIR})
 
+    # GCC 15+ enables libstdc++ assertions at -O0; they call into the full C++
+    # runtime, which -nostdlib firmware doesn't link (e.g. std::atomic::load).
+    target_compile_definitions(fw.elf PRIVATE _GLIBCXX_NO_ASSERTIONS)
+
     # -mcpu/-mthumb appear in both lists: the compiler needs them to generate
     # Cortex-M3 Thumb code, the linker to pick the matching runtime libraries.
     set(CPU_FLAGS -mcpu=cortex-m3 -mthumb)
