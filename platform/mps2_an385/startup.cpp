@@ -41,6 +41,8 @@ extern "C" {
     void PendSV_Handler() __attribute__((weak, alias("Default_Handler")));
     void SysTick_Handler() __attribute__((weak, alias("Default_Handler")));
     void UART0RX_Handler() __attribute__((weak, alias("Default_Handler")));
+    void UART1RX_Handler() __attribute__((weak, alias("Default_Handler")));
+    void UART1TX_Handler() __attribute__((weak, alias("Default_Handler")));
 }
 
 int main();
@@ -104,8 +106,8 @@ const void* const vector_table[] = {
     // External interrupts: index 16 + IRQ number. Sources per QEMU hw/arm/mps2.c (AN385).
     reinterpret_cast<const void*>(UART0RX_Handler),    // IRQ 0:  UART0 RX
     reinterpret_cast<const void*>(Default_Handler),    // IRQ 1:  UART0 TX
-    reinterpret_cast<const void*>(Default_Handler),    // IRQ 2:  UART1 RX
-    reinterpret_cast<const void*>(Default_Handler),    // IRQ 3:  UART1 TX
+    reinterpret_cast<const void*>(UART1RX_Handler),    // IRQ 2:  UART1 RX
+    reinterpret_cast<const void*>(UART1TX_Handler),    // IRQ 3:  UART1 TX
     reinterpret_cast<const void*>(Default_Handler),    // IRQ 4:  UART2 RX
     reinterpret_cast<const void*>(Default_Handler),    // IRQ 5:  UART2 TX
     reinterpret_cast<const void*>(Default_Handler),    // IRQ 6:  (unused)

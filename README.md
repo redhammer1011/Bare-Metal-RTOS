@@ -11,7 +11,7 @@ SDK or HAL: startup code, linker script, and drivers are written from scratch.
 | 0 | Toolchain, startup code, linker script, polled UART, CMake, QEMU + GDB | ✅ Done |
 | 1 | Full vector table + fault handler, SysTick, interrupt-driven UART with ring buffer, unit tests | ✅ Done |
 | 2 | Cooperative scheduler, then FreeRTOS; latency and priority-inversion experiments | 🔄 Cooperative scheduler + FreeRTOS port done |
-| 3 | Framed serial protocol (COBS + CRC), Python plant simulation, complementary filter + PID | 🔄 Protocol done |
+| 3 | Framed serial protocol (COBS + CRC), Python plant simulation, complementary filter + PID | 🔄 Protocol + UART1 link done |
 | 4 | CI, documentation, results | ⬜ |
 
 ## Boot sequence
@@ -164,16 +164,50 @@ on the wire: COBS(raw packet) 0x00                          max 38 bytes per fra
   so only fixed external bytes catch it.
 - On target (`-Os`) the protocol is ~600 B of flash.
 
+### The UART1 link
+
+UART1 carries the packets; UART0 stays a text console. `SerialPort`
+(`platform/mps2_an385/serial_port.*`) is an interrupt-driven driver, one object
+per UART, with a 128-byte ring buffer in each direction:
+
+- **RX:** the RX interrupt clears its flag, pushes the byte, and notifies
+  `link_task`, which feeds bytes to a `FrameParser`.
+- **TX:** `write()` queues bytes and, if the transmitter is idle, sends the
+  first one itself. The TX interrupt fires as each byte *finishes* (it doesn't
+  fire when enabled while idle, per QEMU's `cmsdk-apb-uart.c`), and sends the
+  next. `tx_busy_` is set **before** the `DATA` write because QEMU completes
+  the byte, and raises the interrupt, inside that store; the kick runs with
+  interrupts masked so the ISR can't interleave with it.
+
+`link_task` (priority 4) currently loops every valid packet back.
+`sim/link_test.py` checks the full path against the firmware in QEMU:
+
+```
+[round trips] sent 500, echoed 500, mismatches 0, timeouts 0
+              latency ms: median 4.03, p99 8.36, max 55.13
+[corruption]  sent 347 valid + 153 corrupted; echoed 347, corrupted accepted 0, valid missing 0
+firmware:     link ok=847 crc=43 cobs=110 len=0 type=0 ovf=0 rxdrop=0
+```
+
+**Link throughput is limited by QEMU, not the firmware.** Round-trip time
+grows ~100 µs per byte (10-byte frames 2.1 ms, 22-byte frames 3.7–4.6 ms), with
+or without `-icount`, and identical for `-O0` and `-Os` firmware: QEMU moves
+bytes between the socket and the emulated UART one at a time. A sensor +
+actuator exchange (18 B + 14 B) therefore takes ~3 ms, capping a lockstep
+control loop at ~200–300 Hz in emulation. A real UART at 115200 baud costs
+87 µs per byte, so the limit is realistic; flight controllers use faster links
+or SPI for this.
+
 ## Layout
 
 ```
 app/                    application: tasks (main.cpp), FreeRTOSConfig.h, kernel hooks
 core/                   hardware-independent code (ring buffer, scheduler, COBS, CRC-16,
                         packets, frame parser), unit-tested on the host
-sim/                    Python side: protocol mirror and its tests (plant simulation next)
+sim/                    Python side: protocol mirror and tests, UART1 loopback test (plant next)
 rtos/FreeRTOS-Kernel/   FreeRTOS kernel, git submodule pinned to V11.3.2
-platform/mps2_an385/    board-specific: startup, linker script, UART, SysTick, NVIC,
-                        critical sections, fault handler
+platform/mps2_an385/    board-specific: startup, linker script, console UART, interrupt-driven
+                        SerialPort, SysTick, NVIC, critical sections, fault handler
 tests/                  GoogleTest unit tests for core/
 cmake/                  arm-none-eabi toolchain file
 scripts/                QEMU launch script
@@ -191,6 +225,7 @@ plain clone run `git submodule update --init`.
 cmake --preset arm              # configure (once)
 cmake --build --preset arm      # build -> build-arm/fw.elf, prints flash/RAM usage
 .\scripts\run_qemu.ps1          # run; exit with Ctrl+A then X
+python sim/link_test.py         # in a second terminal: UART1 loopback test (TCP 5560)
 ```
 
 Expected output: a `Tick N` line every second, and anything you type is echoed
@@ -248,6 +283,12 @@ main stack reserved by `linker.ld`. Measured with `arm-none-eabi-size -A`.
 | Phase 1 | MinSizeRel (`-Os`) | 1,124 B | 96 B | |
 | Phase 2: cooperative scheduler | Debug (`-O0`) | 2,948 B | 184 B | + 84 B scheduler table (4 tasks) |
 | Phase 2: FreeRTOS | Debug (`-O0`) | 19,508 B | 4,332 B | kernel ≈ 16 KB flash; 3 × 1 KB task stacks + TCBs, idle task, mutex |
+| Phase 3: UART1 link | Debug (`-O0`) | 23,248 B | 5,844 B | + link task stack, FrameParser, SerialPort buffers |
+
+`uart1_port` lands in `.data`, not `.bss`: its base address is non-zero, so the
+whole object (296 B, mostly its two ring buffers) has an initial image in flash
+that `Reset_Handler` copies. Keeping the configuration outside the object would
+move the buffers back to `.bss`.
 
 Phase 1 RAM breakdown (from `build-arm/fw.map` / `arm-none-eabi-nm -S`): UART RX
 ring buffer 72 B (64 data + two 4-byte indices), RX drop counter 4 B,

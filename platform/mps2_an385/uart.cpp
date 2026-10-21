@@ -6,39 +6,18 @@
 
 #include "uart.hpp"
 
-#include <cstddef>
 #include <cstdint>
 
+#include "cmsdk_uart_regs.hpp"
+#include "nvic.hpp"
 #include "ring_buffer.hpp"
 
-#include "nvic.hpp"
-
 namespace {
-    struct UartRegs {
-        volatile std::uint32_t DATA;      // 0x00
-        volatile std::uint32_t STATE;     // 0x04
-        volatile std::uint32_t CTRL;      // 0x08
-        volatile std::uint32_t INTSTATUS; // 0x0C
-        volatile std::uint32_t BAUDDIV;   // 0x10
-    };
+    using namespace cmsdk_uart;
 
-    static_assert(offsetof(UartRegs, DATA) == 0x00);
-    static_assert(offsetof(UartRegs, STATE) == 0x04);
-    static_assert(offsetof(UartRegs, CTRL) == 0x08);
-    static_assert(offsetof(UartRegs, INTSTATUS) == 0x0C);
-    static_assert(offsetof(UartRegs, BAUDDIV) == 0x10);
-
-    constexpr std::uint32_t STATE_TX_FULL = 1u << 0;
-    constexpr std::uint32_t CTRL_TX_EN    = 1u << 0;
-    constexpr std::uint32_t CTRL_RX_EN    = 1u << 1;
-    constexpr std::uint32_t CTRL_RX_INTEN = 1u << 3;
-    constexpr std::uint32_t INTSTATUS_RX  = 1u << 1;   // write 1 to clear
-
-    volatile UartRegs& uart0(){
-        return *reinterpret_cast<volatile UartRegs*>(0x40004000);
+    volatile Regs& uart0(){
+        return at(UART0_BASE);
     }
-
-    constexpr unsigned UART0_RX_IRQ = 0;
 
     RingBuffer<char, 64> uart_rx_buffer;
     volatile std::uint32_t rx_dropped = 0;
@@ -46,7 +25,7 @@ namespace {
 }
 
 void uart_init(){
-    uart0().BAUDDIV = 0x10;                     // minimum valid divisor
+    uart0().BAUDDIV = BAUDDIV_MIN;
     uart0().CTRL = CTRL_TX_EN | CTRL_RX_EN;
 }
 

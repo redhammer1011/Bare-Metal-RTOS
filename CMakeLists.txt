@@ -42,6 +42,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Generic")
     add_executable(fw.elf
         ${PLATFORM_DIR}/startup.cpp
         ${PLATFORM_DIR}/uart.cpp
+        ${PLATFORM_DIR}/serial_port.cpp
         ${PLATFORM_DIR}/systick.cpp
         ${PLATFORM_DIR}/fault.cpp
         ${APP_DIR}/main.cpp
