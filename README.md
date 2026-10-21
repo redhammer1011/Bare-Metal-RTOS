@@ -10,7 +10,7 @@ SDK or HAL: startup code, linker script, and drivers are written from scratch.
 |---|---|---|
 | 0 | Toolchain, startup code, linker script, polled UART, CMake, QEMU + GDB | ✅ Done |
 | 1 | Full vector table + fault handler, SysTick, interrupt-driven UART with ring buffer, unit tests | ✅ Done |
-| 2 | Own cooperative/preemptive scheduler, then FreeRTOS; jitter and priority-inversion experiments | 🔄 Cooperative scheduler done |
+| 2 | Cooperative scheduler, then FreeRTOS; latency and priority-inversion experiments | 🔄 Cooperative scheduler + FreeRTOS port done |
 | 3 | Framed serial protocol (COBS + CRC), Python plant simulation, complementary filter + PID | ⬜ |
 | 4 | CI, documentation, results | ⬜ |
 
@@ -20,7 +20,9 @@ SDK or HAL: startup code, linker script, and drivers are written from scratch.
    address at `0x4`, both from the vector table in `startup.cpp`.
 2. `Reset_Handler` copies `.data` from flash to RAM, zeroes `.bss`, and runs
    C++ global constructors (`.init_array`).
-3. `main()` runs.
+3. `main()` creates the FreeRTOS tasks and calls `vTaskStartScheduler()`,
+   which programs SysTick, switches to the process stack, and starts the
+   highest-priority task. It never returns.
 
 Memory layout (from AN385 Table 3-1), defined in `linker.ld`:
 
@@ -29,25 +31,76 @@ Memory layout (from AN385 Table 3-1), defined in `linker.ld`:
 | Code ("FLASH") | `0x00000000` | 4 MB | vector table, `.text`, `.rodata`, `.data` initial values |
 | RAM | `0x20000000` | 4 MB | `.data`, `.bss`, stack (top of RAM, grows down) |
 | UART0 | `0x40004000` | | CMSDK APB UART, RX interrupt = IRQ 0 |
-| SysTick | `0xE000E010` | | 1 ms tick from the 25 MHz core clock |
+| SysTick | `0xE000E010` | | 1 ms kernel tick from the 25 MHz core clock (LOAD = 24999) |
 
 ## Interrupts
 
-| Source | Vector | Handler | Notes |
-|---|---|---|---|
-| SysTick | 15 | `SysTick_Handler` | increments `millis()` / `millis64()` |
-| UART0 RX | 16 (IRQ 0) | `UART0RX_Handler` | clears flag, pushes byte into a lock-free SPSC ring buffer |
-| HardFault | 3 | `HardFault_Handler` | prints faulting PC and fault status registers, halts |
-| everything else | | `Default_Handler` | weak aliases; override by defining the named handler |
+| Source | Vector | Handler | NVIC priority | Notes |
+|---|---|---|---|---|
+| HardFault | 3 | `HardFault_Handler` | fixed (−1) | prints faulting PC and fault status registers, halts; reads the frame from MSP or PSP |
+| SVCall | 11 | FreeRTOS `vPortSVCHandler` | — | starts the first task |
+| PendSV | 14 | FreeRTOS `xPortPendSVHandler` | `0xFF` (least urgent) | context switch |
+| SysTick | 15 | FreeRTOS `xPortSysTickHandler` | `0xFF` | kernel tick; calls `vApplicationTickHook()` → `millis()` |
+| UART0 RX | 16 (IRQ 0) | `UART0RX_Handler` | `0xC0` | clears flag, pushes byte into a lock-free SPSC ring buffer, notifies `echo_task` |
+| everything else | | `Default_Handler` | | weak aliases; override by defining the named handler |
 
-RX interrupts are enabled from `main()`, never from startup code: the ISR writes
-`.bss`, which `Reset_Handler` zeroes after `uart_init()` runs.
+The three FreeRTOS handlers are renamed to our vector table names in
+`FreeRTOSConfig.h`, so they override the weak aliases in `startup.cpp`.
+
+**Priority rule:** an ISR that calls a FreeRTOS `...FromISR()` API must have an
+NVIC priority numerically ≥ `configMAX_SYSCALL_INTERRUPT_PRIORITY` (`0xA0`).
+UART RX runs at `0xC0`. QEMU implements all 8 priority bits (measured by writing
+`0xFF` to a priority register and reading it back); real Cortex-M3 parts
+usually implement 3 or 4.
+
+RX interrupts are enabled from inside `echo_task`, once the scheduler is
+running: never from startup code (the ISR writes `.bss`, which `Reset_Handler`
+zeroes after `uart_init()`), and not before `vTaskStartScheduler()` (the ISR
+can request a context switch, which needs a running task).
 
 ## Scheduling
 
-`main()` hands work to a time-triggered cooperative scheduler
-(`core/scheduler.hpp`): a fixed table of tasks, each a plain function that runs
-to completion every `period_ms`.
+### FreeRTOS (current)
+
+The firmware runs on FreeRTOS V11.3.2 (`rtos/FreeRTOS-Kernel`, a git
+submodule), configured in `app/FreeRTOSConfig.h`: preemptive, 1 kHz tick,
+static allocation only (no heap), stack-overflow checking on every context
+switch.
+
+| Task | Priority | Wakes on | Job |
+|---|---|---|---|
+| `echo_task` | 3 | task notification from the UART RX ISR | echo every queued byte |
+| `tick_task` | 2 | `xTaskDelayUntil`, every 1000 ms | print `Tick N` |
+| `slow_task` (demo) | 1 | `xTaskDelayUntil`, every 100 ms | busy-wait 30 ms |
+
+UART output is serialized by a FreeRTOS mutex (`UartLock`, RAII) so lines from
+different tasks don't interleave. Each task has a statically allocated 1 KB
+stack; measured high-water marks at `-O0` are 124 B (echo) and 164 B (tick).
+
+**Echo latency** for 120 single characters sent ~8 ms apart, with
+`kSlowTaskDemo = true` adding a task that busy-waits 30 ms every 100 ms:
+
+| Scheduler | Slow task | Median | 90th percentile | Max | Echoes > 5 ms |
+|---|---|---|---|---|---|
+| Cooperative | off | 0.7 ms | 1.4 ms | 2.1 ms | 0 / 120 |
+| Cooperative | on | 0.9 ms | 29.2 ms | 63.9 ms | 17 / 120 |
+| FreeRTOS | off | 0.3 ms | 0.5 ms | 2.2 ms | 0 / 120 |
+| FreeRTOS | on, priority 1 (below echo) | 0.3 ms | 0.5 ms | 2.4 ms | 0 / 120 |
+| FreeRTOS | on, priority 4 (above echo) | 0.4 ms | 23.3 ms | 34.7 ms | 12 / 120 |
+
+- Under FreeRTOS, `echo_task` blocks until the ISR notifies it instead of
+  polling every 1 ms, so even the unloaded median drops.
+- With the slow task below echo, the kernel preempts it the moment a byte
+  arrives: latency is unchanged by the 30% CPU hog.
+- With the slow task above echo, the stalls return. Preemption only helps a
+  task that outranks the work in its way: priority assignment is the design
+  decision.
+
+### Cooperative scheduler (Phase 2, step 1)
+
+Before FreeRTOS, `main()` ran a time-triggered cooperative scheduler
+(`core/scheduler.hpp`), kept as a unit-tested library: a fixed table of tasks,
+each a plain function that runs to completion every `period_ms`.
 
 - **No drift:** a task's next deadline advances by exactly one period, so a
   late run doesn't shift later ones.
@@ -59,30 +112,17 @@ to completion every `period_ms`.
   as an argument, so host tests drive it with a fake clock (including across
   the wrap) in milliseconds of real time.
 
-| Task | Period | Job |
-|---|---|---|
-| `echo_task` | 1 ms | echo every byte the RX ISR has queued |
-| `tick_task` | 1000 ms | print `Tick N` |
-
-**The cooperative limitation, measured.** Setting `kSlowTaskDemo = true` in
-`app/main.cpp` adds a task that busy-waits 30 ms every 100 ms. Echo latency for
-120 single characters sent ~8 ms apart:
-
-| | Median | 90th percentile | Max | Echoes > 5 ms |
-|---|---|---|---|---|
-| Normal | 0.7 ms | 1.4 ms | 2.1 ms | 0 / 120 |
-| With slow task | 0.9 ms | 29.2 ms | 63.9 ms | 17 / 120 |
-
-Bytes still arrive and are buffered by the ISR, but `echo_task` can't run until
-`slow_task` returns, so any byte landing in that window waits for it. A task's
-worst-case start delay is the sum of the other tasks' run times, which is what a
-preemptive scheduler removes.
+Its measured limitation (cooperative rows in the table above): bytes still
+arrive and are buffered by the ISR, but `echo_task` can't run until `slow_task`
+returns, so a task's worst-case start delay is the sum of the other tasks' run
+times. That is what moving to a preemptive kernel removed.
 
 ## Layout
 
 ```
-app/                    application code (main.cpp)
+app/                    application: tasks (main.cpp), FreeRTOSConfig.h, kernel hooks
 core/                   hardware-independent code (ring buffer, scheduler), unit-tested on the host
+rtos/FreeRTOS-Kernel/   FreeRTOS kernel, git submodule pinned to V11.3.2
 platform/mps2_an385/    board-specific: startup, linker script, UART, SysTick, NVIC,
                         critical sections, fault handler
 tests/                  GoogleTest unit tests for core/
@@ -94,6 +134,9 @@ scripts/                QEMU launch script
 
 Requires the Arm GNU Toolchain (`arm-none-eabi-*`), CMake 3.20+, Ninja, and
 QEMU (`qemu-system-arm`) on `PATH`.
+
+Clone with the FreeRTOS submodule (`git clone --recursive ...`), or after a
+plain clone run `git submodule update --init`.
 
 ```powershell
 cmake --preset arm              # configure (once)
@@ -154,6 +197,7 @@ main stack reserved by `linker.ld`. Measured with `arm-none-eabi-size -A`.
 | Phase 1 | Release (`-O3`) | 1,716 B | 96 B | |
 | Phase 1 | MinSizeRel (`-Os`) | 1,124 B | 96 B | |
 | Phase 2: cooperative scheduler | Debug (`-O0`) | 2,948 B | 184 B | + 84 B scheduler table (4 tasks) |
+| Phase 2: FreeRTOS | Debug (`-O0`) | 19,508 B | 4,332 B | kernel ≈ 16 KB flash; 3 × 1 KB task stacks + TCBs, idle task, mutex |
 
 Phase 1 RAM breakdown (from `build-arm/fw.map` / `arm-none-eabi-nm -S`): UART RX
 ring buffer 72 B (64 data + two 4-byte indices), RX drop counter 4 B,
