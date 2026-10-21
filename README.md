@@ -10,7 +10,7 @@ SDK or HAL: startup code, linker script, and drivers are written from scratch.
 |---|---|---|
 | 0 | Toolchain, startup code, linker script, polled UART, CMake, QEMU + GDB | ✅ Done |
 | 1 | Full vector table + fault handler, SysTick, interrupt-driven UART with ring buffer, unit tests | ✅ Done |
-| 2 | Own cooperative/preemptive scheduler, then FreeRTOS; jitter and priority-inversion experiments | ⬜ Next |
+| 2 | Own cooperative/preemptive scheduler, then FreeRTOS; jitter and priority-inversion experiments | 🔄 Cooperative scheduler done |
 | 3 | Framed serial protocol (COBS + CRC), Python plant simulation, complementary filter + PID | ⬜ |
 | 4 | CI, documentation, results | ⬜ |
 
@@ -43,11 +43,46 @@ Memory layout (from AN385 Table 3-1), defined in `linker.ld`:
 RX interrupts are enabled from `main()`, never from startup code: the ISR writes
 `.bss`, which `Reset_Handler` zeroes after `uart_init()` runs.
 
+## Scheduling
+
+`main()` hands work to a time-triggered cooperative scheduler
+(`core/scheduler.hpp`): a fixed table of tasks, each a plain function that runs
+to completion every `period_ms`.
+
+- **No drift:** a task's next deadline advances by exactly one period, so a
+  late run doesn't shift later ones.
+- **Overruns:** if a task falls whole periods behind, the missed deadlines are
+  counted (`overruns(i)`) and skipped instead of run back-to-back.
+- **Wrap-safe:** due checks use the signed difference of 32-bit timestamps, so
+  scheduling continues correctly across the 49.7-day `millis()` wrap.
+- **Testable:** the scheduler never reads the clock; `run(now)` takes the time
+  as an argument, so host tests drive it with a fake clock (including across
+  the wrap) in milliseconds of real time.
+
+| Task | Period | Job |
+|---|---|---|
+| `echo_task` | 1 ms | echo every byte the RX ISR has queued |
+| `tick_task` | 1000 ms | print `Tick N` |
+
+**The cooperative limitation, measured.** Setting `kSlowTaskDemo = true` in
+`app/main.cpp` adds a task that busy-waits 30 ms every 100 ms. Echo latency for
+120 single characters sent ~8 ms apart:
+
+| | Median | 90th percentile | Max | Echoes > 5 ms |
+|---|---|---|---|---|
+| Normal | 0.7 ms | 1.4 ms | 2.1 ms | 0 / 120 |
+| With slow task | 0.9 ms | 29.2 ms | 63.9 ms | 17 / 120 |
+
+Bytes still arrive and are buffered by the ISR, but `echo_task` can't run until
+`slow_task` returns, so any byte landing in that window waits for it. A task's
+worst-case start delay is the sum of the other tasks' run times, which is what a
+preemptive scheduler removes.
+
 ## Layout
 
 ```
 app/                    application code (main.cpp)
-core/                   hardware-independent code (ring buffer), unit-tested on the host
+core/                   hardware-independent code (ring buffer, scheduler), unit-tested on the host
 platform/mps2_an385/    board-specific: startup, linker script, UART, SysTick, NVIC,
                         critical sections, fault handler
 tests/                  GoogleTest unit tests for core/
@@ -118,6 +153,7 @@ main stack reserved by `linker.ld`. Measured with `arm-none-eabi-size -A`.
 | Phase 1 | Debug (`-O0`) | 2,460 B | 96 B | + SysTick, IRQ-driven RX, ring buffer, fault handler |
 | Phase 1 | Release (`-O3`) | 1,716 B | 96 B | |
 | Phase 1 | MinSizeRel (`-Os`) | 1,124 B | 96 B | |
+| Phase 2: cooperative scheduler | Debug (`-O0`) | 2,948 B | 184 B | + 84 B scheduler table (4 tasks) |
 
 Phase 1 RAM breakdown (from `build-arm/fw.map` / `arm-none-eabi-nm -S`): UART RX
 ring buffer 72 B (64 data + two 4-byte indices), RX drop counter 4 B,
