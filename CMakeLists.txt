@@ -15,14 +15,37 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Generic")
 
     # ------------------------------------------------------------------ firmware
     set(PLATFORM_DIR ${CMAKE_SOURCE_DIR}/platform/mps2_an385)
+    set(APP_DIR ${CMAKE_SOURCE_DIR}/app)
+    set(FREERTOS_DIR ${CMAKE_SOURCE_DIR}/rtos/FreeRTOS-Kernel)
     set(LINKER_SCRIPT ${PLATFORM_DIR}/linker.ld)
+
+    # -mcpu/-mthumb appear in both lists: the compiler needs them to generate
+    # Cortex-M3 Thumb code, the linker to pick the matching runtime libraries.
+    set(CPU_FLAGS -mcpu=cortex-m3 -mthumb)
+
+    # FreeRTOS kernel (git submodule), built as C with its config from app/.
+    # Only the parts we use: tasks, queues (also semaphores/mutexes), lists,
+    # and the GCC Cortex-M3 port. No heap_*.c: allocation is static only.
+    add_library(freertos STATIC
+        ${FREERTOS_DIR}/tasks.c
+        ${FREERTOS_DIR}/queue.c
+        ${FREERTOS_DIR}/list.c
+        ${FREERTOS_DIR}/portable/GCC/ARM_CM3/port.c
+    )
+    target_include_directories(freertos PUBLIC
+        ${FREERTOS_DIR}/include
+        ${FREERTOS_DIR}/portable/GCC/ARM_CM3
+        ${APP_DIR}                          # FreeRTOSConfig.h
+    )
+    target_compile_options(freertos PRIVATE ${CPU_FLAGS} -ffreestanding)
 
     add_executable(fw.elf
         ${PLATFORM_DIR}/startup.cpp
         ${PLATFORM_DIR}/uart.cpp
         ${PLATFORM_DIR}/systick.cpp
         ${PLATFORM_DIR}/fault.cpp
-        app/main.cpp
+        ${APP_DIR}/main.cpp
+        ${APP_DIR}/freertos_hooks.cpp
     )
 
     target_include_directories(fw.elf PRIVATE ${PLATFORM_DIR} ${CORE_DIR})
@@ -31,9 +54,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Generic")
     # runtime, which -nostdlib firmware doesn't link (e.g. std::atomic::load).
     target_compile_definitions(fw.elf PRIVATE _GLIBCXX_NO_ASSERTIONS)
 
-    # -mcpu/-mthumb appear in both lists: the compiler needs them to generate
-    # Cortex-M3 Thumb code, the linker to pick the matching runtime libraries.
-    set(CPU_FLAGS -mcpu=cortex-m3 -mthumb)
+    # -nostdlib drops every default library, so name the ones we need:
+    # newlib-nano's libc for memset/memcpy (the kernel uses memset) and libgcc
+    # for compiler helper routines.
+    target_link_libraries(fw.elf PRIVATE freertos c_nano gcc)
 
     target_compile_options(fw.elf PRIVATE
         ${CPU_FLAGS}

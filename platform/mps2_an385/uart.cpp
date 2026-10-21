@@ -38,8 +38,11 @@ namespace {
         return *reinterpret_cast<volatile UartRegs*>(0x40004000);
     }
 
+    constexpr unsigned UART0_RX_IRQ = 0;
+
     RingBuffer<char, 64> uart_rx_buffer;
     volatile std::uint32_t rx_dropped = 0;
+    UartRxCallback rx_callback = nullptr;   // written before the IRQ is enabled, then only read by the ISR
 }
 
 void uart_init(){
@@ -83,9 +86,14 @@ void uart_put_hex32(std::uint32_t value){
     }
 }
 
-void uart_enable_rx_interrupt(){
+void uart_set_rx_callback(UartRxCallback callback){
+    rx_callback = callback;
+}
+
+void uart_enable_rx_interrupt(std::uint8_t nvic_priority){
+    nvic_set_priority(UART0_RX_IRQ, nvic_priority);
     uart0().CTRL |= CTRL_RX_INTEN;
-    nvic_enable_irq(0); // Enable UART0 RX interrupt (IRQ 0)
+    nvic_enable_irq(UART0_RX_IRQ);
 }
 
 std::uint32_t uart_rx_dropped_count(){
@@ -101,5 +109,8 @@ extern "C" void UART0RX_Handler(){
     const char c = static_cast<char>(uart0().DATA);
     if(!uart_rx_buffer.push(c)){
         ++rx_dropped; // RX buffer overflow, increment dropped count
+    }
+    if(rx_callback != nullptr){
+        rx_callback();
     }
 }
