@@ -1,0 +1,2 @@
+# Plotting only. The protocol, plant and tests use just the standard library.
+matplotlib>=3.10
