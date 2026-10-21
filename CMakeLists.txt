@@ -76,6 +76,7 @@ else()
 
     add_executable(core_tests
         tests/test_ring_buffer.cpp
+        tests/test_scheduler.cpp
     )
     target_include_directories(core_tests PRIVATE ${CORE_DIR})
     target_link_libraries(core_tests PRIVATE GTest::gtest_main)
