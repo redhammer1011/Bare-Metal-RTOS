@@ -11,7 +11,7 @@ SDK or HAL: startup code, linker script, and drivers are written from scratch.
 | 0 | Toolchain, startup code, linker script, polled UART, CMake, QEMU + GDB | ✅ Done |
 | 1 | Full vector table + fault handler, SysTick, interrupt-driven UART with ring buffer, unit tests | ✅ Done |
 | 2 | Cooperative scheduler, then FreeRTOS; latency and priority-inversion experiments | 🔄 Cooperative scheduler + FreeRTOS port done |
-| 3 | Framed serial protocol (COBS + CRC), Python plant simulation, complementary filter + PID | ⬜ |
+| 3 | Framed serial protocol (COBS + CRC), Python plant simulation, complementary filter + PID | 🔄 Protocol done |
 | 4 | CI, documentation, results | ⬜ |
 
 ## Boot sequence
@@ -117,11 +117,60 @@ arrive and are buffered by the ISR, but `echo_task` can't run until `slow_task`
 returns, so a task's worst-case start delay is the sum of the other tasks' run
 times. That is what moving to a preemptive kernel removed.
 
+## Serial protocol
+
+Binary link between the firmware and the Python plant simulation
+(`core/packet.hpp`, mirrored in `sim/protocol.py`):
+
+```
+raw packet:  [type][seq][payload 0-32 B][crc_lo][crc_hi]    CRC-16/CCITT-FALSE over type..payload
+on the wire: COBS(raw packet) 0x00                          max 38 bytes per frame
+```
+
+- **COBS framing:** the encoded frame contains no `0x00`, so `0x00` marks
+  frame ends and a receiver resynchronizes at the next one after any error.
+  Overhead is fixed at 1 byte per 254.
+- **CRC-16/CCITT-FALSE** (poly `0x1021`, init `0xFFFF`, check value
+  `0x29B1`): detects all 1- and 2-bit errors, odd bit counts, and bursts up to
+  16 bits.
+- **Explicit serialization:** fields are written one by one, little-endian,
+  floats as IEEE-754 binary32. Structs are never `memcpy`'d onto the wire, so
+  padding and byte order can't differ between compilers.
+- **`FrameParser`:** byte-at-a-time state machine (collecting / discarding)
+  with a counter for each rejection: COBS, length, CRC, type, overflow.
+
+| Type | Direction | Payload |
+|---|---|---|
+| `Sensor` | plant → firmware | gyro rate (°/s), accel x, accel z (g) |
+| `Actuator` | firmware → plant | motor 1, motor 2 |
+| `Telemetry` | firmware → host | setpoint, estimate, PID output, loop time (µs) |
+| `SetSetpoint` | host → firmware | setpoint (°) |
+| `SetGains` | host → firmware | kp, ki, kd |
+
+**Verification:**
+- 21 C++ tests: known COBS vectors and max-length runs, the CRC check value,
+  every single-bit flip detected, round trips, resync after joining mid-frame,
+  overlong frames, and two fuzz tests: 1M random bytes, and 20,000 frames with
+  10% corrupted by bit flips, dropped and inserted bytes, in which no corrupted
+  packet was ever delivered.
+- Fuzz tests also pass under `-fsanitize=undefined,bounds-strict` (checked to
+  trap on a deliberately planted buffer overrun).
+- Mutation-checked against six planted bugs (wrong CRC polynomial or init,
+  missing COBS max-run rule, extra trailing zero, missing length check,
+  big-endian fields); all caught.
+- **Golden wire bytes** are asserted in both `tests/test_protocol.cpp` and
+  `sim/test_protocol.py`, and the same frames built on the Cortex-M3 in QEMU
+  match byte for byte. A consistently wrong CRC passes every round-trip test,
+  so only fixed external bytes catch it.
+- On target (`-Os`) the protocol is ~600 B of flash.
+
 ## Layout
 
 ```
 app/                    application: tasks (main.cpp), FreeRTOSConfig.h, kernel hooks
-core/                   hardware-independent code (ring buffer, scheduler), unit-tested on the host
+core/                   hardware-independent code (ring buffer, scheduler, COBS, CRC-16,
+                        packets, frame parser), unit-tested on the host
+sim/                    Python side: protocol mirror and its tests (plant simulation next)
 rtos/FreeRTOS-Kernel/   FreeRTOS kernel, git submodule pinned to V11.3.2
 platform/mps2_an385/    board-specific: startup, linker script, UART, SysTick, NVIC,
                         critical sections, fault handler
@@ -163,6 +212,7 @@ Hardware-independent code in `core/` is tested on the host with GoogleTest
 cmake --preset native           # configure (once)
 cmake --build --preset native   # build tests
 ctest --preset native           # run
+python -m unittest discover -s sim   # Python protocol tests (no extra packages)
 ```
 
 ## Debug
