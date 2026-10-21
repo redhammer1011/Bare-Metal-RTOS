@@ -11,7 +11,7 @@ SDK or HAL: startup code, linker script, and drivers are written from scratch.
 | 0 | Toolchain, startup code, linker script, polled UART, CMake, QEMU + GDB | ✅ Done |
 | 1 | Full vector table + fault handler, SysTick, interrupt-driven UART with ring buffer, unit tests | ✅ Done |
 | 2 | Cooperative scheduler, then FreeRTOS; latency and priority-inversion experiments | 🔄 Cooperative scheduler + FreeRTOS port done |
-| 3 | Framed serial protocol (COBS + CRC), Python plant simulation, complementary filter + PID | 🔄 Protocol, UART1 link, plant model done |
+| 3 | Framed serial protocol (COBS + CRC), Python plant simulation, complementary filter + PID | 🔄 Protocol, link, plant, controller done; firmware integration next |
 | 4 | CI, documentation, results | ⬜ |
 
 ## Boot sequence
@@ -238,19 +238,87 @@ equation, constant-torque motion, the motor lag, damping decay, end stops,
 command clamping, step-size independence, and the sensor noise, bias and
 random-walk statistics.
 
+## Attitude controller
+
+`core/attitude_controller.hpp` turns IMU samples into motor commands; the host
+tests and (next) the firmware run the same class.
+
+```
+gyro, accel → complementary filter → angle, rate → PID → diff → motor1 = hover + diff, motor2 = hover − diff
+```
+
+- **Complementary filter** (`core/complementary_filter.hpp`): integrates the
+  gyro for fast motion and pulls toward the accelerometer angle for slow motion
+  (τ = 0.5 s). A plain filter settles bias × τ = 0.75° off, so it also
+  estimates the gyro bias from the persistent gyro/accelerometer disagreement.
+  A **startup calibration** (averaging 0.5 s of samples while held still, as
+  flight controllers do at power-on) seeds the bias and angle; without it the
+  bias estimate took ~5 s to converge.
+- **PID** (`core/pid.hpp`): derivative on the measurement, taken directly from
+  the bias-corrected gyro (no derivative kick, no differentiated noise); output
+  limits; anti-windup by conditional integration; **integral separation**
+  (integrate only within 2° of the setpoint); integral stored as its output
+  contribution so gain changes don't bump the output.
+- **Gains from a model, not trial and error:** with diff → 4584 °/s² and the
+  plant's damping and gravity terms, natural frequency 15 rad/s and damping
+  ratio 0.8 give kp = 0.051, kd = 0.0050; ki = kp / 1 s.
+
+![Host closed-loop step response](docs/img/closed_loop_host.png)
+
+**Requirements** (set before tuning) and results for a 10° step at 200 Hz with
+the default gyro bias and sensor noise:
+
+| | Requirement | Result |
+|---|---|---|
+| Overshoot | < 15 % | 11.5 % |
+| Settling (±0.5°) | < 1 s | 0.32 s |
+| Steady-state error | < 0.2° | 0.055° |
+
+How the controller got there (each step visible in `tests/test_control.cpp`):
+
+| Change | Overshoot | Settling | Cause it fixed |
+|---|---|---|---|
+| Initial design | 13 % | 2.45 s | bias estimate took ~5 s to converge from a single noisy start sample |
+| + startup calibration | 18 % | 1.27 s | integral charged during the climb, then unwound slowly (gravity needs the opposite sign at 10°) |
+| + integral separation (2°) | 11.5 % | 0.32 s | |
+
+A 30° step overshoots ~16 % whether or not the integral term exists: the
+motors saturate for ~245 ms and can't brake in time. That is an actuator
+limit (setpoint rate limiting would address it), so the test checks that the
+integral adds no overshoot of its own rather than an absolute bound.
+
+**Host closed-loop tests** (`tests/test_control.cpp`, 21 tests) run the
+controller against `tests/sim_plant.hpp`, a C++ port of `sim/plant.py` pinned
+to it by reference values from the Python model. They cover the filter
+(calibration, bias × τ offset without estimation, offset removal, lag-free
+tracking), each PID behaviour, and closed-loop cases: the step requirements,
+recovery from 8° of tilt, a 10 % weaker motor (removed by the integral; PD alone
+leaves > 0.5°), no calibration and no bias estimation (> 0.5° off), a
+saturating step, and stability at 100 Hz. Mutation-checked: a wrong-sign D
+term, removed anti-windup, a wrong-way bias update and swapped motors are all
+caught (the anti-windup test was rewritten after its first version missed it).
+`python sim/plot_closed_loop.py` regenerates the figure.
+
+On the Cortex-M3 (no FPU, `-Os`) the controller with software floating point
+and `atanf` is ~4 KB of flash. It calls `atan2f` via `__builtin_atan2f`:
+GCC 15 refuses `<cmath>` (and C++ `<math.h>`, which wraps it) under
+`-ffreestanding`, and the firmware must link newlib's libm.
+
 ## Layout
 
 ```
 app/                    application: tasks (main.cpp), FreeRTOSConfig.h, kernel hooks
 core/                   hardware-independent code (ring buffer, scheduler, COBS, CRC-16,
-                        packets, frame parser), unit-tested on the host
+                        packets, frame parser, complementary filter, PID, attitude
+                        controller), unit-tested on the host
 sim/                    Python side: protocol mirror, plant model, open-loop experiments,
                         UART1 loopback test, and their tests
 docs/img/               figures generated by the sim/ scripts
 rtos/FreeRTOS-Kernel/   FreeRTOS kernel, git submodule pinned to V11.3.2
 platform/mps2_an385/    board-specific: startup, linker script, console UART, interrupt-driven
                         SerialPort, SysTick, NVIC, critical sections, fault handler
-tests/                  GoogleTest unit tests for core/
+tests/                  GoogleTest unit tests for core/, C++ plant port, closed-loop harness
+                        and the closed_loop_sim tool
 cmake/                  arm-none-eabi toolchain file
 scripts/                QEMU launch script
 ```

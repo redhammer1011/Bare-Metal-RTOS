@@ -103,6 +103,7 @@ else()
         tests/test_ring_buffer.cpp
         tests/test_scheduler.cpp
         tests/test_protocol.cpp
+        tests/test_control.cpp
     )
     target_include_directories(core_tests PRIVATE ${CORE_DIR})
     target_link_libraries(core_tests PRIVATE GTest::gtest_main)
@@ -112,5 +113,11 @@ else()
 
     include(GoogleTest)
     gtest_discover_tests(core_tests)
+
+    # Host tool: one closed-loop run as CSV, plotted by sim/plot_closed_loop.py.
+    add_executable(closed_loop_sim tests/closed_loop_sim.cpp)
+    target_include_directories(closed_loop_sim PRIVATE ${CORE_DIR})
+    target_compile_options(closed_loop_sim PRIVATE -Wall -Wextra)
+    target_link_options(closed_loop_sim PRIVATE -static)
 
 endif()
